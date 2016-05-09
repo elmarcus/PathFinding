@@ -1,17 +1,95 @@
 #!/usr/bin/python
 
-import sys, rospy, math, datetime
+import sys, rospy, math
 from PyQt4 import QtGui, QtCore
 from geometry_msgs.msg import Twist, Pose2D
 from std_msgs.msg import ColorRGBA, Float32, Bool
 from apriltags_intrude_detector.srv import apriltags_intrude
 from apriltags_intrude_detector.srv import apriltags_info
 
+class PotentialField:
+    
+	def __init__(self, points):
+		self.angle=0.0
+		self.defaultAngle=0.0
+		self.points = points
+		xSum = 0.0
+		ySum = 0.0		
+		for point in points:
+			xSum += point.x	
+			ySum += point.y
+		xSum /= 4.0
+		ySum /= 4.0
+		self.centerPoint = {'x': xSum, 'y': ySum}
+		self.power = 0
+		self.radius = math.sqrt(math.pow(points[0].x - self.centerPoint['x'], 2) + math.pow(points[0].y - self.centerPoint['y'], 2) )
+
+	def getDistanceTo(self, robotLocation):
+		return math.sqrt( math.pow(robotLocation.x - self.centerPoint['x'], 2) + math.pow(robotLocation.y - self.centerPoint['y'], 2) )
+
+	def getAngleTo(self, robotLocation):
+		return math.atan2(float(-1*(self.centerPoint['y'] - robotLocation.y)), float(self.centerPoint['x'] - robotLocation.x))
+        
+class AttractiveField(PotentialField):
+
+	def __init__(self, points):
+		print "in the constructor"
+		
+		PotentialField.__init__(self, points)
+		print " called base constructor"
+		self.alpha = 1.5
+		
+    
+	def getVelocityChange(self, robotLocation):
+		d = PotentialField.getDistanceTo(self, robotLocation)
+		if (d < self.radius):
+			print "inside goal"
+			print self.radius
+			
+			return {'x': 0, 'y': 0}
+		else:
+			self.angle += PotentialField.getAngleTo(self, robotLocation)
+			deltaX = self.alpha*(d - self.radius)*math.cos(self.angle)
+			deltaY = self.alpha*(d - self.radius)*math.sin(self.angle)
+			self.angle=self.defaultAngle
+			return {'x': deltaX, 'y': deltaY}
+            
+    
+class RepulsiveField(PotentialField):	
+    	 	
+	def __init__(self, points):
+		PotentialField.__init__(self,points)
+		self.beta = 1.0
+		self.s = 60.0
+		self.bigNum = 9001.0
+		self.radius*=1.5
+        
+	def getVelocityChange(self, robotLocation):
+		d = PotentialField.getDistanceTo(self, robotLocation)
+		self.angle += PotentialField.getAngleTo(self, robotLocation)
+		deltaX = 0
+		deltaY = 0
+		if (d < self.radius):
+			print "inside repulsive field"
+			print self.radius
+			deltaX = -1*(math.cos(self.angle)/math.fabs(math.cos(self.angle)))*self.bigNum
+			deltaY = -1*(math.sin(self.angle)/math.fabs(math.sin(self.angle)))*self.bigNum
+		elif (self.radius <= d and d <= self.s + self.radius):
+			deltaX = -1*self.beta*(self.s + self.radius - d)*math.cos(self.angle)
+			deltaX = -1*self.beta*(self.s + self.radius - d)*math.sin(self.angle)
+		self.angle = self.defaultAngle
+		return {'x': deltaX, 'y': deltaY}
+
+class TangentalField(RepulsiveField):
+	def __init__(self, points):
+		RepulsiveField.__init__(self, points)
+		self.defaultAngle = math.pi/2
+		self.angle+=self.defaultAngle
+
 # You implement this class
 class Controller:
     stop = True # This is set to true when the stop button is pressed
     fields = []
-    polygons = []
 	
     def __init__(self):
         self.cmdVelPub = rospy.Publisher('cmd_vel', Twist, queue_size=1)
@@ -48,16 +126,20 @@ class Controller:
         try:
             info_query = rospy.ServiceProxy("apriltags_info", apriltags_info)
             resp = info_query()
-            time = str(datetime.datetime.now())
-			f = open('polygons' + time + '.txt', 'w')
+
             for i in range(len(resp.polygons)):
                 # A polygon (access points using poly.points)
                 poly = resp.polygons[i]
                 # The polygon's id (just an integer, 0 is goal, all else is bad)
                 t_id = resp.ids[i]
-                for point in poly:
-                    f.write(str(point.x) + ' ' + str(point.y) + ' ')
-                f.write('\n')
+                print "ind of polygons" + str(i)
+                if (int(t_id) == 0): 
+                    print "calling attr field constructor"   
+                    self.fields.append(AttractiveField(poly.points))
+                elif (int(t_id) == 2):
+                    self.fields.append(TangentalField(poly.points))
+                else:
+                    self.fields.append(RepulsiveField(poly.points))
         except Exception, e:
             print "Exception: " + str(e)
         finally:
