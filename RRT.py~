@@ -2,6 +2,17 @@ import ImageToGraph.py
 import TraversePath.py
 from sets import Set
 
+class tree:
+	def __init__(self)
+		self.edges = []
+		self.nodes = []
+
+	def add_edge(self, f, s)
+		edges.add((f,s))
+
+	def add_vertex(self, n)
+		node.add(n)
+
 class RRT:
 	
 	def __init__(self, graph):
@@ -45,9 +56,10 @@ class RRT:
 
 
 	def run(self)
-		init_node = graph.init
+		init_node = graph.start
 		visited_set = sets.Set()
-
+		path = []
+		G = tree
 		G.add_vertex(init_node)
 
 		for n in Range(1, len(g.nodes)):

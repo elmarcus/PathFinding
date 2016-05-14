@@ -1,6 +1,6 @@
 #!/usr/bin/python
-
-import sys, rospy, math, datetime
+import polygonsToGraph, RRT, AStar
+import sys, rospy, math, datetime 
 from PyQt4 import QtGui, QtCore
 from geometry_msgs.msg import Twist, Pose2D
 from std_msgs.msg import ColorRGBA, Float32, Bool
@@ -10,33 +10,49 @@ from apriltags_intrude_detector.srv import apriltags_info
 # You implement this class
 class Controller:
     stop = True # This is set to true when the stop button is pressed
-    fields = []
-    polygons = []
+
 	
     def __init__(self):
         self.cmdVelPub = rospy.Publisher('cmd_vel', Twist, queue_size=1)
         self.trackposSub = rospy.Subscriber("tracked_pos", Pose2D, self.trackposCallback)
+        self.close_distance = 5.0
+        self.last_node = None
+        self.next_node = None    
+        self.current_node_index = 0
+        self.current_vx = 20.0
+        self.current_vy = 20.0   
+        self.path = []
+        self.goal = -1
 
+    def isCloseTo(self, point1, point2):
+        return (math.fabs(point1.x - point2.x) < self.close_distance and  math.fabs(point1.y - point2.y) < self.close_distance)       
+        
     def getVelocityChange(self, robotLocation):
-        deltaX = 0
-        deltaY = 0
-        for field in self.fields:
-            delta = field.getVelocityChange(robotLocation)
-            #print "Individual field return: " + str(delta)
-            deltaX += delta['x']
-            deltaY += delta['y']
-        return {'x': deltaX, 'y': deltaY}
+        if(not self.next_node or not self.last_node):
+            print "NULL NODES"
+            return
+        if (self.isCloseTo(robotLocation, self.next_node.center)):
+            print "IN IF STATEMENT"
+            if (self.next_node.n_id == self.goal):
+                self.current_vx = 0
+                self.current_vy = 0
+            angle = math.atan2(float(-1*(self.next_node.center.y - robotLocation.y)), float(self.next_node.center.x - robotLocation.x))
+            self.current_vx = math.cos(angle)
+            self.current_vy = math.sin(angle)
+            self.last_node = self.next_node
+            self.current_node_index += 1
+            self.next_node = self.path[self.current_node_index]
 
     def trackposCallback(self, msg):
         # This function is continuously called
         if not self.stop:
             twist = Twist()
-            vel = self.getVelocityChange(msg)
+            self.getVelocityChange(msg)
             #print "Velocity: " + str(vel)
             # Change twist.linear.x to be your desired x velocity
-            twist.linear.x = vel['x']
+            twist.linear.x = self.current_vx
             # Change twist.linear.y to be your desired y velocity
-            twist.linear.y = vel['y']
+            twist.linear.y = self.current_vy
             twist.linear.z = 0
             twist.angular.x = 0
             twist.angular.y = 0
@@ -45,23 +61,36 @@ class Controller:
 
     def start(self):
         rospy.wait_for_service("apriltags_info")
+
         try:
             info_query = rospy.ServiceProxy("apriltags_info", apriltags_info)
             resp = info_query()
-            time = str(datetime.datetime.now())
-			f = open('polygons' + time + '.txt', 'w')
+            time = str(datetime.datetime.now()).replace(' ', '').replace('.','').replace(':','').strip()
+            print time
+            f = open('/home/mu/polygons/polygons' + time + '.txt', 'w')
+            print "created f"
             for i in range(len(resp.polygons)):
                 # A polygon (access points using poly.points)
                 poly = resp.polygons[i]
-                # The polygon's id (just an integer, 0 is goal, all else is bad)
+                # The polygon's id (just an integer, 0 is self.goal, all else is bad)
                 t_id = resp.ids[i]
-                for point in poly:
-                    f.write(str(point.x) + ' ' + str(point.y) + ' ')
-                f.write('\n')
+
+
         except Exception, e:
             print "Exception: " + str(e)
         finally:
             self.stop = False
+        print "CONTROLLER"
+        graph = polygonsToGraph.translateToGraph(resp.polygons)
+        self.goal = graph.goal
+       # polygonsToGraph.visualizeGraph(graph, resp.polygons)
+        rrt = RRT.RRT(graph)
+        self.path = rrt.run()
+        #astar = AStar.AStar(graph)
+        #self.path = astar.run()
+        #polygonsToGraph.visualizeResultFromNodes(graph, self.path, resp.polygons)
+        self.last_node = self.path[0]
+        self.next_node = self.path[1]
 
     def stop(self):
         self.stop = True
